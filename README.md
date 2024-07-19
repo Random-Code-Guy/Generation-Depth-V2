@@ -16,7 +16,7 @@ passes tests and improves the application
 
 ## Pre-trained Models Install
 
-**four Pre-trained models** of varying scales for robust relative depth estimation Can be found in the depth anything v2 hugging face
+**four** Pre-trained models of varying scales for robust relative depth estimation Can be found in the depth anything v2 hugging face
 download these models and save then into the models folder created by the application after first launch
 
 | Model | Params | Checkpoint |
