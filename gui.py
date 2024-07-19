@@ -41,7 +41,7 @@ class DepthMapApp:
         self.model_var = None
         self.model_frame = None
         self.root = root
-        self.root.title("Depth Map Generator - Random-Code-Guy")
+        self.root.title("Depth Map Generator - Random Code Guy")
 
         self.model = None
         self.model_name = None
