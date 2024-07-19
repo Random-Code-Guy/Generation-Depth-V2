@@ -208,6 +208,7 @@ def generate_high_quality_depth_map(image, model, model_name, log_queue, assets_
             compiled_tiles = compiled_tiles.astype("uint16")
             tiled_depth_map = Image.fromarray(compiled_tiles)
             tiled_depth_map.save(os.path.join(assets_folder, f'tiled_depth_{tile_sizes[i]}.png'))
+            tiled_depth_map.save(os.path.join('maps', f'tiled_depth_{tile_sizes[i]}.png'))
             log_queue.put(f"Tiled depth map for tile size {tile_sizes[i]} saved.\n")
 
         grey_im = np.mean(im, axis=2)
