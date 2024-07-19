@@ -8,6 +8,8 @@ if __name__ == "__main__":
         os.makedirs('maps')
     if not os.path.exists('assets'):
         os.makedirs('assets')
+    if not os.path.exists('models'):
+        os.makedirs('models')
         
     root = ttk.Window(themename="superhero")
     app = DepthMapApp(root)
