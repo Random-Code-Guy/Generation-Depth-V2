@@ -27,12 +27,12 @@ DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'mps' if torch.ba
 def reload_midas_repository(app):
     def task():
         try:
-            app.log_queue.put(f"Reloading MiDaS Repository.\n")
+            app.log_queue.put(f">> Reloading MiDaS Repository.\n")
             logger = Logger(app.log_queue)
             sys.stdout = logger
             sys.stderr = logger
             torch.hub.help("intel-isl/MiDaS", "DPT_BEiT_L_384", force_reload=True)
-            app.log_queue.put(f"MiDaS Repository successfully Reloaded.\n")
+            app.log_queue.put(f">> MiDaS Repository successfully Reloaded.\n")
         except Exception as reload_e:
             app.log_queue.put(f"Error Reloading MiDaS Repository: {str(reload_e)}\n")
         finally:
@@ -60,7 +60,7 @@ def load_default_model(app, model_name):
             app.model.to(DEVICE)
             app.model.eval()
 
-            app.log_queue.put(f"{model_name} model loaded successfully.\n")
+            app.log_queue.put(f">> {model_name} model loaded successfully.\n")
         except Exception as default_e:
             app.log_queue.put(f"Error loading model: {str(default_e)}\n")
         finally:
@@ -84,7 +84,7 @@ def load_depth_anything_v2_model(app, model_path, encoder):
             app.model = app.model.to(DEVICE).eval()
             app.model_name = f"DepthAnythingV2_{encoder}"
 
-            app.log_queue.put(f"DepthAnythingV2 {encoder} model loaded successfully.\n")
+            app.log_queue.put(f">> DepthAnythingV2 {encoder} model loaded successfully.\n")
         except Exception as version2_e:
             app.log_queue.put(f"Error loading model: {str(version2_e)}\n")
         finally:
