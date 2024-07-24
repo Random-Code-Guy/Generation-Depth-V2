@@ -32,7 +32,7 @@ def process_log_queue(app):
                 app.status_text.delete('1.0', '2.0')
     except queue.Empty:
         pass
-    app.root.after(100, process_log_queue, app)
+    app.after(100, process_log_queue, app)
 
 
 def update_usage(app):
@@ -44,7 +44,7 @@ def update_usage(app):
         app.ram_label.config(text=f"RAM Usage: {memory_usage:.2f} MB")
 
         stop_update_thread(app)
-        app.root.after(1000, start_update_thread, app)
+        app.after(1000, start_update_thread, app)
 
 
 def start_update_thread(app):
