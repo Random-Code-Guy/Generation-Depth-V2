@@ -1,25 +1,44 @@
 import os
 import queue
 import threading
-from tkinter import filedialog, messagebox, DoubleVar, IntVar, StringVar, Checkbutton, HORIZONTAL, WORD, END
-
-import ttkbootstrap as ttk
-from ttkbootstrap.constants import *
-
-from image_processing import load_image, generate_high_quality_depth_map
+import tkinter
+from PIL import Image
+import customtkinter as ctk
+from tkinter import filedialog, messagebox
+import numpy as np
+from image_processing import load_image, generate_depth_map
 from model_loader import load_depth_anything_v2_model, load_default_model, reload_midas_repository
-from utils import process_log_queue
 
 MAX_LOG_LINES = 100
+default_depth = os.path.join(os.getcwd(), "assets", "images", "default", "default.jpg")
+tiling_options = [[2, 2], [4, 4], [6, 6], [8, 8], [10, 10], [12, 12], [14, 14], [16, 16], [18, 18], [20, 20], [22, 22],
+                  [24, 24], [26, 26], [28, 28], [30, 30], [32, 32], [34, 34], [36, 36], [38, 38], [40, 40], [42, 42],
+                  [44, 44], [46, 46], [48, 48], [50, 50], [52, 52], [54, 54], [56, 56], [58, 58], [60, 60], [62, 62],
+                  [64, 64]]
 
 
-class DepthMapApp:
-    def __init__(self, root):
-        self.sigma_gaussian_var = None
-        self.difference_multiplier_var = None
-        self.sigma_difference_var = None
-        self.sigma_blur_var = None
-        self.filter_strength_var = None
+def count_image_files(folder_path):
+    image_count = 0
+    for filename in os.listdir(folder_path):
+        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+            image_count += 1
+    return image_count
+
+
+class DepthMapApp(ctk.CTk):
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.sidebar_reset = None
+        self.sidebar_clear_logs = None
+        self.sidebar_reload_midas = None
+        self.video_path = None
+        self.sidebar_load_video = None
+        self.sidebar_load_images = None
+        self.logo_label = None
+        self.sidebar_frame = None
+        self.title("Depth Map Generator - Random-Code-Guy")
+
         self.cpu_label = None
         self.reload_midas_button = None
         self.display_image = None
@@ -40,128 +59,186 @@ class DepthMapApp:
         self.model_selector = None
         self.model_var = None
         self.model_frame = None
-        self.root = root
-        self.root.title("Depth Map Generator - Random Code Guy")
 
         self.model = None
         self.model_name = None
         self.device = None
+        self.input_folder = None
+        self.output_folder = None
+        self.project_name = None
+        self.image_total = 0
+        self.image_count = 0
 
-        self.create_widgets()
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure((2, 3), weight=0)
+        self.grid_rowconfigure((0, 1, 2), weight=1)
+
+        # create sidebar frame
+        self.sidebar_frame = ctk.CTkFrame(self, width=140, corner_radius=0)
+        self.sidebar_frame.grid(row=0, column=0, rowspan=4, sticky="nsew")
+        self.sidebar_frame.grid_rowconfigure(6, weight=1)
+
+        self.logo_label = ctk.CTkLabel(self.sidebar_frame, text="GDepth V2.1", font=ctk.CTkFont(size=20, weight="bold"))
+        self.logo_label.grid(row=0, column=0, padx=20, pady=(20, 10))
+
+        self.sidebar_load_images = ctk.CTkButton(self.sidebar_frame, text="Load Images", command=self.select_folder)
+        self.sidebar_load_images.grid(row=1, column=0, padx=20, pady=10)
+
+        self.sidebar_load_video = ctk.CTkButton(self.sidebar_frame, text="Load Video", command=self.load_video)
+        self.sidebar_load_video.grid(row=2, column=0, padx=20, pady=10)
+
+        self.sidebar_reload_midas = ctk.CTkButton(self.sidebar_frame, text="Reload MiDaS",
+                                                  command=self.reload_repository)
+        self.sidebar_reload_midas.grid(row=3, column=0, padx=20, pady=10)
+
+        self.sidebar_clear_logs = ctk.CTkButton(self.sidebar_frame, text="Clear Logs", command=self.clear_log)
+        self.sidebar_clear_logs.grid(row=4, column=0, padx=20, pady=10)
+
+        self.sidebar_reset = ctk.CTkButton(self.sidebar_frame, text="Reset Settings", command=self.reset)
+        self.sidebar_reset.grid(row=5, column=0, padx=20, pady=10)
+
+        # create log textbox
+        self.status_text = ctk.CTkTextbox(self, width=250, wrap='word')
+        self.status_text.grid(row=1, column=1, padx=(20, 0), pady=(20, 0), sticky="nsew")
+
+        # create model view
+        self.model_frame = ctk.CTkScrollableFrame(self, label_text="Model Options")
+        self.model_frame.grid(row=0, column=2, padx=(20, 0), pady=(20, 0), sticky="nsew")
+        self.model_frame.grid_columnconfigure(0, weight=0)
+
+        self.model_var = ctk.StringVar(value="Select Model")
+        self.model_selector = ctk.CTkComboBox(self.model_frame, variable=self.model_var,
+                                              values=["ZoeDepth N", "ZoeDepth K", "ZoeDepth NK", "DepthAnythingV2 vits",
+                                                      "DepthAnythingV2 vitb", "DepthAnythingV2 vitl",
+                                                      "DepthAnythingV2 vitg"])
+        self.model_selector.pack(side=ctk.LEFT, padx=5, pady=5)
+        self.model_selector.grid(row=1, column=0, padx=(30, 0), pady=(10, 10))
+
+        self.display_mode_var = ctk.StringVar(value="Output Mode")
+        self.display_mode_selector = ctk.CTkComboBox(self.model_frame, variable=self.display_mode_var,
+                                                     values=["Normal", "Inverted"])
+        self.display_mode_selector.grid(row=2, column=0, padx=(30, 0), pady=(10, 10))
+
+        self.color_map_var = ctk.StringVar(value="Output Style")
+        self.color_map_selector = ctk.CTkComboBox(self.model_frame, variable=self.color_map_var, values=["gray",
+                                                                                                         "viridis",
+                                                                                                         "plasma",
+                                                                                                         "inferno",
+                                                                                                         "magma",
+                                                                                                         "cividis"])
+
+        self.color_map_selector.grid(row=3, column=0, padx=(30, 0), pady=(10, 10))
+
+        self.model_button = ctk.CTkButton(self.model_frame, text="Load Model", command=self.load_model)
+        self.model_button.grid(row=4, column=0, padx=(30, 0), pady=(10, 10))
+
+        # create video frame
+        self.video_frame = ctk.CTkScrollableFrame(self, label_text="Video Options")
+        self.video_frame.grid(row=0, column=3, padx=(20, 20), pady=(20, 0), sticky="nsew")
+        self.video_frame.grid_columnconfigure(0, weight=0)
+
+        self.video_checkbox_1 = ctk.CTkCheckBox(master=self.video_frame, text="Save Audio (In)")
+        self.video_checkbox_1.grid(row=1, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
+
+        self.video_checkbox_2 = ctk.CTkCheckBox(master=self.video_frame, text="Zerolatency (Out)")
+        self.video_checkbox_2.grid(row=2, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
+
+        self.video_checkbox_3 = ctk.CTkCheckBox(master=self.video_frame, text="HW Acceleration (In/Out)")
+        self.video_checkbox_3.grid(row=3, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
+
+        self.output_codec_var = ctk.StringVar(value="Codec (Out)")
+        self.output_codec_selector = ctk.CTkComboBox(self.video_frame, variable=self.output_codec_var,
+                                                     values=["H264", "H265", "Nvenc"])
+        self.output_codec_selector.grid(row=4, column=0, padx=(10, 0), pady=(15, 0), sticky="w")
+
+        self.output_container_var = ctk.StringVar(value="Container (Out)")
+        self.output_container_selector = ctk.CTkComboBox(self.video_frame, variable=self.output_container_var,
+                                                     values=["mp4", "mkv"])
+        self.output_container_selector.grid(row=5, column=0, padx=(10, 0), pady=(15, 0), sticky="w")
+
+        # create preview and progressbar frame
+        self.slider_progressbar_frame = ctk.CTkFrame(self)
+        self.slider_progressbar_frame.grid(row=0, column=1, padx=(20, 0), pady=(20, 0), sticky="nsew")
+        self.slider_progressbar_frame.grid_columnconfigure(0, weight=1)
+        self.slider_progressbar_frame.grid_rowconfigure(4, weight=1)
+
+        depth_image = ctk.CTkImage(light_image=Image.open(default_depth), dark_image=Image.open(default_depth),
+                                   size=(360, 260))
+
+        self.depth_label = ctk.CTkLabel(self.slider_progressbar_frame, text="", image=depth_image)
+        self.depth_label.grid(row=0, column=0, padx=(0, 0), pady=(15, 15), sticky="nsew")
+
+        self.count_label = ctk.CTkLabel(self.slider_progressbar_frame, text="0/0", font=ctk.CTkFont(size=10, weight="bold"))
+        self.count_label.grid(row=1, column=0, padx=(0, 0), pady=(0, 0))
+
+        self.progressbar_1 = ctk.CTkProgressBar(self.slider_progressbar_frame)
+        self.progressbar_1.grid(row=2, column=0, padx=(15, 15), pady=(0, 0), sticky="nsew")
+        self.progressbar_1.configure(mode="indeterminnate")
+
+        # Create tiling frame
+        self.tiling_frame = ctk.CTkScrollableFrame(self, label_text="Tiling Options")
+        self.tiling_frame.grid(row=1, column=2, padx=(20, 0), pady=(20, 0), sticky="nsew")
+        self.tiling_frame.grid_columnconfigure(0, weight=1)
+        self.tiling_frame_switches = []
+
+        for i, option in enumerate(tiling_options):
+            tiling_text = f"{option[0]}x{option[1]} Tiling"
+            switch = ctk.CTkSwitch(master=self.tiling_frame, text=tiling_text)
+            switch.grid(row=i, column=0, padx=0, pady=(0, 20))
+            self.tiling_frame_switches.append((switch, option))
+
+        # create Starting frame
+        self.start_frame = ctk.CTkFrame(self)
+        self.start_frame.grid(row=1, column=3, padx=(20, 20), pady=(20, 0), sticky="nsew")
+
+        self.start_video_button = ctk.CTkButton(master=self.start_frame, fg_color="#3b8ed0", text="Start Video Process",
+                                                border_width=0, text_color=("#ffffff", "#3b8ed0"))
+        self.start_video_button.grid(row=0, column=0, padx=(40, 0), pady=(20, 10), sticky="nsew")
+
+        self.start_depth_button = ctk.CTkButton(master=self.start_frame, fg_color="#3b8ed0", text="Start Depth Process",
+                                                border_width=0, text_color=("#ffffff", "#3b8ed0"),
+                                                command=self.process_images)
+
+        self.start_depth_button.grid(row=1, column=0, padx=(40, 0), pady=(10, 0), sticky="nsew")
+
+        self.status_text.insert("0.0", ">> Process Log Ouput\n\n")
+
         self.log_queue = queue.Queue()
-        process_log_queue(self)
+        self.process_log_queue()
 
-    def create_widgets(self):
-        # Model Settings
-        self.model_frame = ttk.Labelframe(self.root, text="MODELS")
-        self.model_frame.pack(side=TOP, fill=X, padx=5, pady=5)
+    def update_image(self, image_path):
+        try:
+            if not os.path.exists(image_path):
+                return
 
-        self.model_var = ttk.StringVar(value="Select Model")
-        self.model_selector = ttk.Combobox(self.model_frame, textvariable=self.model_var,
-                                           values=["ZoeDepth N", "ZoeDepth K", "ZoeDepth NK", "DepthAnythingV2 vits",
-                                                   "DepthAnythingV2 vitb", "DepthAnythingV2 vitl",
-                                                   "DepthAnythingV2 vitg"], width=30)
-        self.model_selector.pack(side=LEFT, padx=5, pady=5)
-        self.model_selector.configure(state="readonly")
+            image = Image.open(image_path)
 
-        self.load_model_button = ttk.Button(self.model_frame, text="Load Model", command=self.load_model)
-        self.load_model_button.pack(side=LEFT, padx=5, pady=5)
+            if image.mode == 'I;16':
+                # Convert to numpy array
+                image_np = np.array(image, dtype=np.uint16)
+                # Normalize the image to 0-255 range
+                image_np = (image_np / 256).astype(np.uint8)
+                # Convert to PIL Image
+                image = Image.fromarray(image_np, mode='L')
+                image = image.convert('RGB')
 
-        self.reload_midas_button = ttk.Button(self.model_frame, text="Reload MiDaS Repository",
-                                              command=self.reload_repository)
-        self.reload_midas_button.pack(side=LEFT, padx=5, pady=5)
+            elif image.mode != 'RGB':
+                image = image.convert('RGB')
 
-        # Map Output Settings
-        self.map_frame = ttk.Labelframe(self.root, text="MAPS")
-        self.map_frame.pack(side=TOP, fill=X, padx=5, pady=5)
+            new_image = ctk.CTkImage(light_image=image, dark_image=image, size=(360, 260))
+            self.depth_label.configure(image=new_image)
+            self.depth_label.image = new_image
 
-        self.display_mode_var = ttk.StringVar(value="Grey Normal")
-        self.display_mode_selector = ttk.Combobox(self.map_frame, textvariable=self.display_mode_var,
-                                                  values=["Grey Normal", "Grey Inverted", "Colored Normal",
-                                                          "Colored Inverted"])
-        self.display_mode_selector.pack(side=LEFT, padx=5, pady=5)
-        self.display_mode_selector.configure(state="readonly")
-
-        # Image Options
-        self.image_frame = ttk.Labelframe(self.root, text="OPTIONS")
-        self.image_frame.pack(side=TOP, fill=X, padx=5, pady=5)
-
-        # Parameter Sliders
-        self.filter_strength_var = DoubleVar(value=0.998)
-        self.sigma_blur_var = IntVar(value=20)
-        self.sigma_difference_var = IntVar(value=40)
-        self.difference_multiplier_var = DoubleVar(value=5)
-        self.sigma_gaussian_var = IntVar(value=2)
-
-        self.create_slider(self.image_frame, "Tiling Filter Strength", self.filter_strength_var, 0.9, 1.0,
-                           format_string="{:.2f}")
-        self.create_slider(self.image_frame, "Tiling Blur", self.sigma_blur_var, 1, 50,
-                           format_string="{:.0f}")
-        self.create_slider(self.image_frame, "Tiling Difference", self.sigma_difference_var, 1, 100,
-                           format_string="{:.0f}")
-        self.create_slider(self.image_frame, "Difference Multiplier", self.difference_multiplier_var, 1,
-                           10, format_string="{:.2f}")
-        self.create_slider(self.image_frame, "Final Filter Strength", self.sigma_gaussian_var, 1, 10,
-                           format_string="{:.2f}")
-
-        # Tiling Options
-        self.tiling_options_frame = ttk.Labelframe(self.image_frame, text="Tiling Options")
-        self.tiling_options_frame.pack(side=BOTTOM, fill=X, padx=5, pady=5)
-
-        self.tiling_options = ["4,4", "8,8", "16,16", "32,32", "64,64"]
-        self.tiling_variables = []
-        for option in self.tiling_options:
-            var = StringVar(value="")
-            chk = Checkbutton(self.tiling_options_frame, text=option, variable=var, onvalue=option, offvalue="")
-            chk.pack(anchor='w')
-            self.tiling_variables.append(var)
-
-        # Controls
-        self.control_frame = ttk.Labelframe(self.root, text="CONTROLS")
-        self.control_frame.pack(side=TOP, fill=X, padx=5, pady=5)
-
-        self.load_button = ttk.Button(self.control_frame, text="Load Image", command=self.load_image)
-        self.load_button.pack(side=LEFT, padx=5, pady=5)
-
-        self.generate_button = ttk.Button(self.control_frame, text="Generate Depth Map",
-                                          command=self.generate_depth_map)
-        self.generate_button.pack(side=LEFT, padx=5, pady=5)
-
-        self.clear_log_button = ttk.Button(self.control_frame, text="Clear Log", command=self.clear_log)
-        self.clear_log_button.pack(side=LEFT, padx=5, pady=5)
-
-        self.reset_button = ttk.Button(self.control_frame, text="Reset", command=self.reset)
-        self.reset_button.pack(side=LEFT, padx=5, pady=5)
-
-        # Status Text
-        self.status_text = ttk.Text(self.root, height=10, wrap=WORD)
-        self.status_text.pack(fill=BOTH, expand=True, padx=5, pady=5)
-
-        # RAM Usage Label
-        self.ram_label = ttk.Label(self.root, text="RAM Usage: 0.00 MB")
-        self.ram_label.pack(side=BOTTOM, fill=X, padx=5, pady=5)
-
-        self.cpu_label = ttk.Label(self.root, text="CPU usage: 0%")
-        self.cpu_label.pack(side=BOTTOM, fill=X, padx=5, pady=5)
-
-    @staticmethod
-    def create_slider(frame, label, variable, from_, to, format_string="{:.2f}"):
-        slider_frame = ttk.Frame(frame)
-        slider_frame.pack(side=LEFT, fill=X, padx=5, pady=5)
-
-        ttk.Label(slider_frame, text=label).pack(side=TOP, padx=5, pady=5)
-        slider = ttk.Scale(slider_frame, variable=variable, from_=from_, to=to, orient=HORIZONTAL)
-        slider.pack(side=TOP, fill=X, padx=5, pady=5)
-
-        value_label = ttk.Label(slider_frame, text=format_string.format(variable.get()))
-        value_label.pack(side=TOP, padx=5, pady=5)
-
-        variable.trace("w", lambda *args: value_label.config(text=format_string.format(variable.get())))
+        except Exception as e:
+            print(f"Error in update_image: {e}")
 
     def reload_repository(self):
         reload_midas_repository(self)
 
     def load_model(self):
+        if not self.project_name:
+            messagebox.showwarning("Warning", "Load Images First.")
+            return
         model_name = self.model_var.get()
         if model_name.startswith("DepthAnythingV2"):
             encoder = model_name.split(" ")[1]
@@ -178,63 +255,139 @@ class DepthMapApp:
             return
         self.image_path = filedialog.askopenfilename(filetypes=[("Image files", "*.jpg;*.jpeg;*.png")])
         if not self.image_path:
-            self.log_queue.put(f"Image not loaded from :  {self.image_path}.\n")
+            self.log_queue.put(f"Image not loaded.\n")
             return
         self.image_tensor, self.display_image = load_image(self.image_path, self.device)
-        self.log_queue.put(f"Image loaded from :  {self.image_path}.\n")
+        self.log_queue.put(f">> Images loaded.\n")
+        self.update_image(self.image_path)
 
-    def generate_depth_map(self):
+    def select_folder(self):
+        self.input_folder = filedialog.askdirectory(title="Select Images Folder")
+
+        if not self.input_folder:
+            self.log_queue.put("Folder not selected.\n")
+            return
+
+        self.project_name = os.path.basename(os.path.normpath(self.input_folder))
+        self.log_queue.put(f">> Project name set : {self.project_name}\n")
+
+        self.image_total = count_image_files(self.input_folder)
+        self.log_queue.put(f">> Loaded {self.image_total} image files.\n")
+
+        self.update_image_count()
+        self.create_folder_structure()
+
+    def create_folder_structure(self):
+
+        self.log_queue.put(f">> Creating project folder structure.\n")
+
+        self.output_folder = os.path.join(os.getcwd(), "assets", "images", self.project_name)
+        if not os.path.exists(self.output_folder):
+            os.makedirs(self.output_folder)
+
+        maps_folder = os.path.join(self.output_folder, "maps")
+        if not os.path.exists(maps_folder):
+            os.makedirs(maps_folder)
+
+        tiles_folder = os.path.join(self.output_folder, "tiles")
+        if not os.path.exists(tiles_folder):
+            os.makedirs(tiles_folder)
+
+        masks_folder = os.path.join(self.output_folder, "masks")
+        if not os.path.exists(masks_folder):
+            os.makedirs(masks_folder)
+
+        self.log_queue.put(f">> Folder structure created.\n")
+
+    def load_video(self):
+        self.video_path = filedialog.askopenfilename(filetypes=[("Video files", "*.mp4;*.mkv;*.avi")])
+        if not self.video_path:
+            self.log_queue.put(f">> Video not loaded.\n")
+            return
+        self.log_queue.put(f"Video loaded.\n")
+
+    def get_selected_tiling_options(self):
+        selected_tiling = []
+        for switch, option in self.tiling_frame_switches:
+            if switch.get():
+                selected_tiling.append(option)
+        return selected_tiling
+
+    def update_image_count(self):
+        new_text = str(self.image_count) + " / " + str(self.image_total)
+        self.count_label.configure(text=new_text)
+
+    def process_images(self):
         def task():
-            if not self.image_path:
-                messagebox.showwarning("Warning", "Please load an image first.")
+            if not self.input_folder:
+                self.log_queue.put("Select input folder first.\n")
                 return
+
+            if not self.model:
+                self.log_queue.put("Select depth model first.\n")
+                return
+
             self.log_queue.put("Starting depth map generation...\n")
+
             display_mode = self.display_mode_var.get()
-            input_filename = os.path.basename(self.image_path)
-            output_filename = os.path.splitext(input_filename)[0] + '_depth.png'
-            assets_folder = 'assets'
-            if not os.path.exists(assets_folder):
-                os.makedirs(assets_folder)
-            output_path = os.path.join('maps', output_filename)
+            color_map = self.color_map_var.get()
 
-            sigma_gaussian = self.sigma_gaussian_var.get()
-            filter_strength = self.filter_strength_var.get()
-            sigma_blur = self.sigma_blur_var.get()
-            sigma_difference = self.sigma_difference_var.get()
-            difference_multiplier = self.difference_multiplier_var.get()
+            tile_sizes = self.get_selected_tiling_options()
+            self.log_queue.put(f">> Using tiling options {tile_sizes}.\n")
 
-            selected_tiling_options = [var.get() for var in self.tiling_variables if var.get()]
-            tile_sizes = [tuple(map(int, option.split(','))) for option in selected_tiling_options]
+            for filename in os.listdir(self.input_folder):
+                if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
+                    self.image_count = self.image_count + 1
+                    input_file = os.path.join(self.input_folder, filename)
 
-            generate_high_quality_depth_map(
-                self.display_image, self.model, self.model_name, self.log_queue,
-                assets_folder, display_mode, output_path,
-                tile_sizes=tile_sizes, filter_strength=filter_strength, sigma_blur=sigma_blur,
-                sigma_difference=sigma_difference, difference_multiplier=difference_multiplier,
-                gaussian_sigma=sigma_gaussian)
-            self.log_queue.put(f"Depth map saved successfully to maps folder as {output_filename}.\n")
+                    # Load image
+                    image = Image.open(input_file).convert('RGB')
+
+                    # Process image
+                    self.log_queue.put(f">> Processing {filename}\n")
+                    self.update_image_count()
+                    self.progressbar_1.start()
+                    generate_depth_map(self, image, self.model, self.model_name, self.log_queue, self.output_folder,
+                                       filename, display_mode, color_map, tile_sizes)
+
+                    self.log_queue.put(f'>> {filename} Processed.\n')
+
+            self.log_queue.put(f'>> {self.project_name} Completed!.\n')
 
         threading.Thread(target=task).start()
 
     def clear_log(self):
-        self.status_text.delete(1.0, END)
+        self.status_text.delete(1.0, ctk.END)
 
     def reset(self):
+        self.progressbar_1.stop()
+        self.update_image(default_depth)
         self.model_var.set("Select Model")
-        self.display_mode_var.set("Grey Normal")
-        self.status_text.delete(1.0, END)
+        self.display_mode_var.set("Output Mode")
+        self.color_map_var.set("Output Style")
+        self.status_text.delete(1.0, ctk.END)
+        self.image_count = 0
+        self.image_total = 0
+        self.input_folder = None
+        self.output_folder = None
         self.model = None
         self.model_name = None
         self.device = None
         self.image_path = None
         self.image_tensor = None
         self.display_image = None
-        self.filter_strength_var.set(0.998)
-        self.sigma_blur_var.set(20)
-        self.sigma_difference_var.set(40)
-        self.difference_multiplier_var.set(5)
-        self.sigma_gaussian_var.set(2)
-        for var in self.tiling_variables:
-            var.set("")
         self.log_queue.queue.clear()
         self.log_queue.put("Application reset to default settings.\n")
+
+    def process_log_queue(self):
+        try:
+            while True:
+                log_message = self.log_queue.get_nowait()
+                self.status_text.insert(ctk.END, log_message)
+                self.status_text.see(ctk.END)
+                line_count = int(self.status_text.index('end-1c').split('.')[0])
+                if line_count > MAX_LOG_LINES:
+                    self.status_text.delete(1.0, 2.0)
+        except queue.Empty:
+            pass
+        self.after(100, self.process_log_queue)
