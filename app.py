@@ -1,17 +1,12 @@
-import ttkbootstrap as ttk
-import os
+import customtkinter as ctk
 from gui import DepthMapApp
-from utils import start_update_thread
+
 
 if __name__ == "__main__":
-    if not os.path.exists('maps'):
-        os.makedirs('maps')
-    if not os.path.exists('assets'):
-        os.makedirs('assets')
-    if not os.path.exists('models'):
-        os.makedirs('models')
-        
-    root = ttk.Window(themename="superhero")
-    app = DepthMapApp(root)
-    start_update_thread(app)
-    root.mainloop()
+    ctk.set_appearance_mode("System")  # Options: "dark", "light"
+    ctk.set_default_color_theme("blue")  # Options: "blue", "green", "dark-blue"
+
+    app = DepthMapApp()
+    app.geometry("1100x700")
+    app.resizable(False, False)  # Make the window non-resizable
+    app.mainloop()
