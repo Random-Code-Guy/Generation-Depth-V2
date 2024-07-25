@@ -8,6 +8,20 @@
 This project started out as a hobby to try generating depth maps using ZeoDepth but
 then expanded to trying to use tiling to increese the depth map quality
 
+## Install Requirements
+```
+pip install customtkinter
+sudo apt-get install python3-tk
+pip install numpy==1.26.4
+pip install opencv-python
+pip install matplotlib
+pip install torch==2.3.1+cpu
+pip install torchvision==0.18.1+cpu
+pip install Pillow
+pip install cython
+pip install git+https://github.com/lucasb-eyer/pydensecrf.git
+```
+
 ## GUI Application
 
 This application has a very simple gui using tkinter with generation done in its own
