@@ -1,7 +1,6 @@
 import os
 import queue
 import threading
-import tkinter
 from PIL import Image
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
@@ -59,6 +58,7 @@ class DepthMapApp(ctk.CTk):
         self.model_selector = None
         self.model_var = None
         self.model_frame = None
+        self.smoothing_history_var = None
 
         self.model = None
         self.model_name = None
@@ -68,6 +68,8 @@ class DepthMapApp(ctk.CTk):
         self.project_name = None
         self.image_total = 0
         self.image_count = 0
+
+        self.stop_event = threading.Event()
 
         self.grid_columnconfigure(1, weight=1)
         self.grid_columnconfigure((2, 3), weight=0)
@@ -112,12 +114,12 @@ class DepthMapApp(ctk.CTk):
                                                       "DepthAnythingV2 vitb", "DepthAnythingV2 vitl",
                                                       "DepthAnythingV2 vitg"])
         self.model_selector.pack(side=ctk.LEFT, padx=5, pady=5)
-        self.model_selector.grid(row=1, column=0, padx=(30, 0), pady=(10, 10))
+        self.model_selector.grid(row=1, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
 
         self.display_mode_var = ctk.StringVar(value="Output Mode")
         self.display_mode_selector = ctk.CTkComboBox(self.model_frame, variable=self.display_mode_var,
                                                      values=["Normal", "Inverted"])
-        self.display_mode_selector.grid(row=2, column=0, padx=(30, 0), pady=(10, 10))
+        self.display_mode_selector.grid(row=2, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
 
         self.color_map_var = ctk.StringVar(value="Output Style")
         self.color_map_selector = ctk.CTkComboBox(self.model_frame, variable=self.color_map_var, values=["gray",
@@ -127,10 +129,25 @@ class DepthMapApp(ctk.CTk):
                                                                                                          "magma",
                                                                                                          "cividis"])
 
-        self.color_map_selector.grid(row=3, column=0, padx=(30, 0), pady=(10, 10))
+        self.color_map_selector.grid(row=3, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
+
+        self.smoothing_switch = ctk.CTkSwitch(master=self.model_frame, text="Temporal Smoothing")
+        self.smoothing_switch.grid(row=4, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
+
+        self.smoothing_history_var = ctk.StringVar(value="Smoothing History")
+        self.smoothing_history_selector = ctk.CTkComboBox(self.model_frame, variable=self.smoothing_history_var,
+                                                          values=["5", "10", "15", "20", "25", "30", "35", "40", "45",
+                                                                  "50"])
+        self.smoothing_history_selector.grid(row=5, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
+
+        self.outline_switch = ctk.CTkSwitch(master=self.model_frame, text="Outline Enhance")
+        self.outline_switch.grid(row=6, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
+
+        self.super_resolution_switch = ctk.CTkSwitch(master=self.model_frame, text="Resolution Enhance")
+        self.super_resolution_switch.grid(row=7, column=0, padx=(10, 0), pady=(10, 0), sticky="w")
 
         self.model_button = ctk.CTkButton(self.model_frame, text="Load Model", command=self.load_model)
-        self.model_button.grid(row=4, column=0, padx=(30, 0), pady=(10, 10))
+        self.model_button.grid(row=8, column=0, padx=(10, 0), pady=(10, 0))
 
         # create video frame
         self.video_frame = ctk.CTkScrollableFrame(self, label_text="Video Options")
@@ -153,7 +170,7 @@ class DepthMapApp(ctk.CTk):
 
         self.output_container_var = ctk.StringVar(value="Container (Out)")
         self.output_container_selector = ctk.CTkComboBox(self.video_frame, variable=self.output_container_var,
-                                                     values=["mp4", "mkv"])
+                                                         values=["mp4", "mkv"])
         self.output_container_selector.grid(row=5, column=0, padx=(10, 0), pady=(15, 0), sticky="w")
 
         # create preview and progressbar frame
@@ -168,7 +185,8 @@ class DepthMapApp(ctk.CTk):
         self.depth_label = ctk.CTkLabel(self.slider_progressbar_frame, text="", image=depth_image)
         self.depth_label.grid(row=0, column=0, padx=(0, 0), pady=(15, 15), sticky="nsew")
 
-        self.count_label = ctk.CTkLabel(self.slider_progressbar_frame, text="0/0", font=ctk.CTkFont(size=10, weight="bold"))
+        self.count_label = ctk.CTkLabel(self.slider_progressbar_frame, text="0/0",
+                                        font=ctk.CTkFont(size=10, weight="bold"))
         self.count_label.grid(row=1, column=0, padx=(0, 0), pady=(0, 0))
 
         self.progressbar_1 = ctk.CTkProgressBar(self.slider_progressbar_frame)
@@ -197,7 +215,7 @@ class DepthMapApp(ctk.CTk):
 
         self.start_depth_button = ctk.CTkButton(master=self.start_frame, fg_color="#3b8ed0", text="Start Depth Process",
                                                 border_width=0, text_color=("#ffffff", "#3b8ed0"),
-                                                command=self.process_images)
+                                                command=self.toggle_process)
 
         self.start_depth_button.grid(row=1, column=0, padx=(40, 0), pady=(10, 0), sticky="nsew")
 
@@ -317,6 +335,14 @@ class DepthMapApp(ctk.CTk):
         new_text = str(self.image_count) + " / " + str(self.image_total)
         self.count_label.configure(text=new_text)
 
+    def toggle_process(self):
+        if self.start_depth_button.cget("text") == "Start Depth Process":
+            self.start_depth_button.configure(text="Stop Depth Process")
+            self.process_images()
+        else:
+            self.stop_event.set()
+            self.start_depth_button.configure(text="Start Depth Process")
+
     def process_images(self):
         def task():
             if not self.input_folder:
@@ -327,15 +353,35 @@ class DepthMapApp(ctk.CTk):
                 self.log_queue.put("Select depth model first.\n")
                 return
 
-            self.log_queue.put("Starting depth map generation...\n")
+            self.log_queue.put(">> Starting depth map generation...\n")
 
             display_mode = self.display_mode_var.get()
             color_map = self.color_map_var.get()
+            smoothing_history = self.smoothing_history_var.get()
+
+            if self.smoothing_switch.get():
+                temporal_smoothing = True
+            else:
+                temporal_smoothing = False
+
+            if self.outline_switch.get():
+                out_lining = True
+            else:
+                out_lining = False
+
+            if self.super_resolution_switch.get():
+                use_super_resolution = True
+            else:
+                use_super_resolution = False
 
             tile_sizes = self.get_selected_tiling_options()
             self.log_queue.put(f">> Using tiling options {tile_sizes}.\n")
 
             for filename in os.listdir(self.input_folder):
+                if self.stop_event.is_set():
+                    self.log_queue.put("Depth map generation stopped.\n")
+                    break
+
                 if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
                     self.image_count = self.image_count + 1
                     input_file = os.path.join(self.input_folder, filename)
@@ -348,12 +394,17 @@ class DepthMapApp(ctk.CTk):
                     self.update_image_count()
                     self.progressbar_1.start()
                     generate_depth_map(self, image, self.model, self.model_name, self.log_queue, self.output_folder,
-                                       filename, display_mode, color_map, tile_sizes)
+                                       filename, display_mode, color_map, tile_sizes,
+                                       use_temporal_smoothing=temporal_smoothing, history_size=smoothing_history,
+                                       use_amf=use_super_resolution,use_rgf=use_super_resolution)
 
                     self.log_queue.put(f'>> {filename} Processed.\n')
 
             self.log_queue.put(f'>> {self.project_name} Completed!.\n')
+            self.start_depth_button.configure(text="Start Depth Process")
 
+        # Clear the stop event before starting the task
+        self.stop_event.clear()
         threading.Thread(target=task).start()
 
     def clear_log(self):
@@ -365,6 +416,7 @@ class DepthMapApp(ctk.CTk):
         self.model_var.set("Select Model")
         self.display_mode_var.set("Output Mode")
         self.color_map_var.set("Output Style")
+        self.smoothing_history_var.set("Smoothing History")
         self.status_text.delete(1.0, ctk.END)
         self.image_count = 0
         self.image_total = 0
